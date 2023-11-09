@@ -1,0 +1,29 @@
+# Infant
+picrust2_pipeline.py \
+  --study_fasta ERR4351036.fasta \
+  --input feature-table.biom \
+  --output picrust2_out_infant 
+
+# Anemia
+picrust2_pipeline.py \
+  -s ERR2183116.fasta \
+  -i feature-table.biom \
+  -o picrust2_out_anemia
+
+# Error code
+/opt/conda/envs/picrust2/bin/picrust2_pipeline.py:4: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
+  __import__('pkg_resources').require('PICRUSt2==2.5.2')
+Traceback (most recent call last):
+  File "/opt/conda/envs/picrust2/bin/picrust2_pipeline.py", line 7, in <module>
+    exec(compile(f.read(), __file__, 'exec'))
+  File "/home/picrust2-2.5.2/scripts/picrust2_pipeline.py", line 277, in <module>
+    main()
+  File "/home/picrust2-2.5.2/scripts/picrust2_pipeline.py", line 239, in main
+    func_outfiles, pathway_outfiles = full_pipeline(study_fasta=args.study_fasta,
+  File "/home/picrust2-2.5.2/picrust2/pipeline.py", line 116, in full_pipeline
+    check_overlapping_seqs(study_fasta, input_table, verbose)
+  File "/home/picrust2-2.5.2/picrust2/pipeline.py", line 361, in check_overlapping_seqs
+    FASTA_ASVs = set(read_fasta(in_seq).keys())
+  File "/home/picrust2-2.5.2/picrust2/util.py", line 63, in read_fasta
+    seq[name] += line
+KeyError: None

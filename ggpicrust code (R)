@@ -1,0 +1,231 @@
+# Load packages
+library(readr)
+library(ggpicrust2)
+library(tibble)
+library(tidyverse)
+library(ggprism)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+library(ggh4x)
+
+#### Combined ####
+# Load metadata
+metadata_cmb <- read_delim("combined_metadata/combined_md.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE) #combined
+filtered_metadata_cmb <- metadata_cmb %>% filter(sex %in% c("female", "male")) #filtered to remove all except female/male in sex column
+metadata_infant <- read_delim("infant/infant_metadata.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE) #infant metadata
+metadata_anemia <- read_delim("anemia/anemia_metadata.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE) #anemia metadata
+filtered_metadata_anemia <- read_delim("anemia/filtered_anemia_metadata.txt", delim = "\t", escape_double = FALSE, trim_ws = TRUE) #filtered to remove all except female/male in sex column
+
+#metadata_anemia_alt <- metadata_anemia %>% mutate(sex = ifelse(sex == "F", "female", ifelse(sex == "M", "male", ifelse(sex == "Missing: Not collected", NA, sex))))
+
+## KEGG Orthology Pathway
+# Input data
+input_file_ko_a <- "picrust2_output/picrust2_output_anemia/KO_metagenome_out/pred_metagenome_unstrat.tsv" #anemia
+input_file_ko_i <- "picrust2_output/picrust2_output_infant/KO_metagenome_out/pred_metagenome_unstrat.tsv" #infant
+ko_abundance_a <- read_delim(input_file_ko_a) #anemia KO abundance
+ko_abundance_i <- read_delim(input_file_ko_i) #infant KO abundance
+ko_abundance_cmb <- bind_rows(ko_abundance_a, ko_abundance_i) #combined KO abundance
+                                                         
+# Convert KO abundance to KEGG pathway abundance
+kegg_abundance_cmb <- ko2kegg_abundance(data = ko_abundance_cmb) #KO to KEGG abundance; combined
+  # !!! First error occurs here (kegg_abundance_cmb_error.jpg) - KEGG abundance calculation completes successfully but results in all NA values; no error message; continued on by conducting ko to kegg conversion separately
+kegg_abundance_a <- ko2kegg_abundance(data = ko_abundance_a) #KO to KEGG abundance; anemia
+kegg_abundance_i <- ko2kegg_abundance(data = ko_abundance_i) #KO to KEGG abundance; infant
+
+# Merge KEGG pathway abundance
+combined_kegg_abundance <- merge(kegg_abundance_a, kegg_abundance_i, by = "row.names", all = TRUE) #merging datasets by row.names
+colnames(combined_kegg_abundance)[1] <- "KO_ID" #renaming row.names column into KO_ID
+
+# Perform pathway differential abundance analysis (DAA) using DESeq2 method
+daa_results_df_cmb <- pathway_daa(abundance = combined_kegg_abundance, metadata = filtered_metadata_cmb, group = "sex", daa_method = "DESeq2", select = NULL, reference = NULL) #using filtered metadata (only female/male in sex column)
+daa_results_df_cmb <- pathway_daa(abundance = combined_kegg_abundance, metadata = metadata_cmb, group = "sex", daa_method = "DESeq2", select = NULL, reference = NULL) #using original combined metadata
+  # !!! Both codes yield error message (below) therefore I continued by conducting DESeq2 analysis on datasets separately    
+    ## Error in `metadata[, matching_columns]`:
+    ## ! Can't subset columns with `matching_columns`.
+    ## ✖ Subscript `matching_columns` can't contain missing values.
+    ## ✖ It has a missing value at location 1.
+    ## Run `rlang::last_trace()` to see where the error occurred.
+daa_results_df_a <- pathway_daa(abundance = kegg_abundance_a, metadata = metadata_anemia, group = "sex", daa_method = "DESeq2", select = NULL, reference = NULL) #DESeq2 analysis on anemia dataset
+  # !!! Code ran successfully; upon viewing analysis results, group1 contained F and some M, while group2 contained Missing:Not collected and some F; reran with filtered data 
+filtered_daa_results_df_a <- pathway_daa(abundance = kegg_abundance_a, metadata = filtered_metadata_anemia, group = "sex", daa_method = "DESeq2", select = NULL, reference = NULL) #DESeq2 analysis on anemia dataset (filtered)
+  # !!! Error message (same as when using combined metadata)
+    ## Error in `metadata[, matching_columns]`:
+    ## ! Can't subset columns with `matching_columns`.
+    ## ✖ Subscript `matching_columns` can't contain missing values.
+    ## ✖ It has a missing value at location 1.
+    ## Run `rlang::last_trace()` to see where the error occurred.
+daa_results_df_i <- pathway_daa(abundance = kegg_abundance_i, metadata = metadata_infant, group = "sex", daa_method = "DESeq2", select = NULL, reference = NULL) #DESeq2 analysis on infant dataset; ran successfully
+
+# Merge DAA results from datasets
+daa_results_df_a <- daa_results_df_a %>%
+  mutate(group1 = ifelse(group1 == "F", "female", ifelse(group1 == "M", "male", group1)),
+         group2 = ifelse(group2 == "F", "female", ifelse(group2 == "M", "male", group2))) #To ensure both datasets have common names
+merged_daa_results_df <- bind_rows(daa_results_df_i, daa_results_df_a) #Merge datasets
+
+# Annotate pathway 
+daa_annotated_results_df <- pathway_annotation(pathway = "KO", daa_results_df = merged_daa_results_df, ko_to_kegg = TRUE)
+  # !!! Error message: An error occured. Retrying... (recurring); continues retrying as they try processing pathways individually
+    ## Analysis for KO Pathway paused here for combined
+
+## Enzyme Commission Pathway 
+# Input data
+input_file_metacyc_a <- "picrust2_output/picrust2_output_anemia/EC_metagenome_out/pred_metagenome_unstrat.tsv" #anemia
+input_file_metacyc_i <- "picrust2_output/picrust2_output_infant/EC_metagenome_out/pred_metagenome_unstrat.tsv" #infant
+metacyc_abundance_a <- read_delim(input_file_metacyc_a, delim = "\t") #anemia MetaCyc abundance
+metacyc_abundance_i <- read_delim(input_file_metacyc_i, delim = "\t") #infant MetaCyc abundance
+metacyc_abundance_cmb <- bind_rows(metacyc_abundance_a, metacyc_abundance_i) #combined MetaCyc abundance
+metacyc_abundance_merge <- merge(metacyc_abundance_a, metacyc_abundance_i) #merged data instead due to error on line 81
+
+# Perform pathway DAA using DESeq2
+metacyc_daa_results_df_cmb <- pathway_daa(abundance = metacyc_abundance_cmb %>% column_to_rownames("function"), metadata = metadata_cmb, group = "sex", daa_method = "DESeq2") #using original combined metadata and combined dataset
+  # !!! Error message: 
+    ## Error in `.rowNamesDF<-`(x, value = value) : 
+    ## duplicate 'row.names' are not allowed
+    ## In addition: Warning message:
+    ## non-unique values when setting 'row.names': ‘EC:1.1.1.1’, ‘EC:1.1.1.100’, ‘EC:1.1.1.103’, ‘EC:1.1.1.108’, ‘EC:1.1.1.11’, ‘EC:1.1.1.122’, ‘EC:1.1.1.125’, ‘EC:1.1.1.130’, ‘EC:1.1.1.132’, ‘EC:1.1.1.133’, ‘EC:1.1.1.136’, ‘EC:1.1.1.137’, ‘EC:1.1.1.14’, ‘EC:1.1.1.140’, ‘EC:1.1.1.157’, ‘EC:1.1.1.159’, ‘EC:1.1.1.169’, ‘EC:1.1.1.17’, ‘EC:1.1.1.179’, ‘EC:1.1.1.18’, ‘EC:1.1.1.193’, ‘EC:1.1.1.2’, ‘EC:1.1.1.202’, ‘EC:1.1.1.203’, ‘EC:1.1.1.205’, ‘EC:1.1.1.206’, ‘EC:1.1.1.215’, ‘EC:1.1.1.219’, ‘EC:1.1.1.22’, ‘EC:1.1.1.23’, ‘EC:1.1.1.25’, ‘EC:1.1.1.251’, ‘EC:1.1.1.26’, ‘EC:1.1.1.261’, ‘EC:1.1.1.262’, ‘EC:1.1.1.264’, ‘EC:1.1.1.267’, ‘EC:1.1.1.27’, ‘EC:1.1.1.271’, ‘EC:1.1.1.276’, ‘EC:1.1.1.28’, ‘EC:1.1.1.281’, ‘EC:1.1.1.282’, ‘EC:1.1.1.284’, ‘EC:1.1.1.287’, ‘EC:1.1.1.289’, ‘EC:1.1.1.29’, ‘EC:1.1.1.290’, ‘EC:1.1.1 [... truncated]
+metacyc_daa_results_df_merge <- pathway_daa(abundance = metacyc_abundance_merge %>% column_to_rownames("function"), metadata = metadata_cmb, group = "sex", daa_method = "DESeq2") #using original combined metadata and merged dataset
+  # !!! Error message (below) therefore attempted analysis on each dataset separately
+    ## Error in `metadata[, matching_columns]`:
+    ## ! Can't subset columns with `matching_columns`.
+    ## ✖ Subscript `matching_columns` can't contain missing values.
+    ## ✖ It has a missing value at location 1.
+    ## Run `rlang::last_trace()` to see where the error occurred.
+metacyc_daa_results_df_a <- pathway_daa(abundance = metacyc_abundance_a %>% column_to_rownames("function"), metadata = metadata_anemia, group = "sex", daa_method = "DESeq2") #anemia only; unfiltered metadata
+filtered_metacyc_daa_results_df_a <- pathway_daa(abundance = metacyc_abundance_a %>% column_to_rownames("function"), metadata = filtered_metadata_anemia, group = "sex", daa_method = "DESeq2") #anemia only; filtered metadata
+  # !!! Same error as lines 49-57
+metacyc_daa_results_df_i <- pathway_daa(abundance = metacyc_abundance_i %>% column_to_rownames("function"), metadata = metadata_infant, group = "sex", daa_method = "DESeq2") #infant only; ran successfully
+
+# Merge DAA results from datasets
+metacyc_daa_results_df_a <- daa_results_df_a %>%
+  mutate(group1 = ifelse(group1 == "F", "female", ifelse(group1 == "M", "male", group1)),
+         group2 = ifelse(group2 == "F", "female", ifelse(group2 == "M", "male", group2))) #To ensure both datasets have common names
+merged_metacyc_daa_results_df <- bind_rows(metacyc_daa_results_df_i, metacyc_daa_results_df_a) #Merge datasets
+
+# Annotate Pathway
+metacyc_daa_annotated_results_df <- pathway_annotation(pathway = "MetaCyc", daa_results_df = merged_metacyc_daa_results_df, ko_to_kegg = FALSE)
+  # !!! Error code (below); paused combined analysis here and continued to separate analyses)
+    ## Error in `$<-.data.frame`(`*tmp*`, "description", value = character(0)) : 
+    ## replacement has 0 rows, data has 1
+
+
+#### ANEMIA ####
+## KEGG Orthology Pathway
+#Annotate Pathway
+daa_annotated_results_df_a <- pathway_annotation(pathway = "KO", daa_results_df = daa_results_df_a, ko_to_kegg = TRUE) #using unfiltered DESeq2 analysis results
+  # !!! Same error as line 68; did not attempt with filtered as no DESeq2 analysis could be conducted using dataset
+
+# Manually annotating pathway using files from add_descriptions.py on q2-picrust2
+input_file_ko_descrip_a <- "picrust2_output/picrust2_output_anemia/KO_metagenome_out/pred_metagenome_unstrat_descrip.tsv" #inputting anemia description file
+ko_abundance_descrip_a <- read_delim(input_file_ko_descrip_a) #anemia KO abundance; extra description column
+  ## I do not know how to properly add description column to my DESeq2 results (daa_results_df_a) as there is no common column (one is KO abundance, other is KEGG abundance); stopped here
+
+## Enzyme Commission pathway
+# Annotate pathway
+metacyc_daa_annotated_results_df_a <- pathway_annotation(pathway = "MetaCyc", daa_results_df = metacyc_daa_results_df_a, ko_to_kegg = FALSE) #using unfiltered DESeq2 analysis results
+  # !!! Error code (below)
+    ## Error in `$<-.data.frame`(`*tmp*`, "description", value = character(0)) : 
+    ## replacement has 0 rows, data has 1
+
+# Manually annotating pathway using filed from add_descriptions.py on q2-picrust2
+input_file_metacyc_descrip_a <- "picrust2_output/picrust2_output_anemia/EC_metagenome_out/pred_metagenome_unstrat_descrip.tsv" #inputting anemia description file
+metacyc_abundance_descrip_a <- read_delim(input_file_metacyc_descrip_a, delim = "\t")
+metacyc_descrip_daa_results_df_a <- metacyc_daa_results_df_a %>% 
+  left_join(metacyc_abundance_descrip_a, by =c("feature" = "function")) # Add descriptions column to DESeq2 results
+
+# Generate PCA plot
+metacyc_pcaplot_a <- pathway_pca(abundance = metacyc_abundance_a %>% column_to_rownames("function"), metadata = metadata_anemia, group = "sex") #PCA Plot for anemia MetaCyc Pathway
+  # PCA Plot attached as Anemia_EC_PCAplot.png
+  ## PCA Plot generated includes male, female, and missing information - unsure of how to filter so that missing information is not present; have tried filtering the metadata but obtained errors when conducting DESeq2 analysis using the filtered metadata
+
+# Generate pathway error bar plot
+pathway_errorbar(abundance = metacyc_abundance_a %>% column_to_rownames("function"), daa_results_df = metacyc_descrip_daa_results_df_a, Group = metadata_anemia$sex, ko_to_kegg = FALSE, p_values_threshold = 0.05, order = "group", select = NULL, p_value_bar = TRUE, colors = NULL, x_lab = "description")
+  # !!! Error code (below)
+    ## The 'group1' or 'group2' column in the 'daa_results_df' data frame contains more than one group. Please filter each to contain only one group.
+    ## The number of features with statistical significance exceeds 30, leading to suboptimal visualization. Please use 'select' to reduce the number of features.
+    ## Currently, you have these features: "EC:1.14.14.9", "NA", "EC:1.1.1.132", "NA", "EC:1.1.1.251", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "EC:2.4.1.44", "EC:2.4.1.58", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "EC:3.2.1.156", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "EC:1.1.1.132", "NA", "EC:1.1.1.251", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "EC:2.4.1.44", "NA", "EC:2.4.1.58", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA", "NA".
+    ## You can find the statistically significant features with the following command:
+    ## daa_results_df %>% filter(p_adjust < 0.05) %>% select(c("feature","p_adjust"))
+    ## Error in pathway_errorbar(abundance = metacyc_abundance_a %>% column_to_rownames("function"),  : 
+significant_features_EC_a <- metacyc_descrip_daa_results_df_a %>% filter(p_adjust <0.05) #filter statistically significant features
+selected_features_EC_a <- significant_features_EC_a %>% select(feature, p_adjust) #select only relevant columns
+pathway_errorbar(
+  abundance = metacyc_abundance_a %>% column_to_rownames("function"),
+  daa_results_df = metacyc_descrip_daa_results_df_a[metacyc_descrip_daa_results_df_a$feature %in% selected_features_EC_a$feature, ],
+  Group = metadata_anemia$sex,
+  ko_to_kegg = FALSE,
+  p_values_threshold = 0.05,
+  order = "group",
+  select = NULL,
+  p_value_bar = TRUE,
+  colors = NULL,
+  x_lab = "description"
+) #create pathway error bar plot
+  # !!! Error code (below); I believe that with this, if I'm able to fix the metadata issue (outlined in row 139), then I'll be able of generating the pathway errorbar
+    ## The 'group1' or 'group2' column in the 'daa_results_df' data frame contains more than one group. Please filter each to contain only one group.
+    ## Error in `[<-.data.frame`(`*tmp*`, daa_results_filtered_sub_df$feature ==  : 
+    ## missing values are not allowed in subscripted assignments of data frames
+
+# Generate pathway heatmap
+metafeature_with_p_0.05_a <- metacyc_descrip_daa_results_df_a %>% filter(p_adjust < 0.05) #filter for statistically significant data
+pathway_heatmap(abundance = metacyc_abundance_a %>% filter("function" %in% metafeature_with_p_0.05_a$feature) %>% column_to_rownames("function"), metadata = metadata_anemia, group = "sex") #create heatmap
+  # !!! Error code (below) ; unsure how to fix
+    ## Error in dimnames(x) <- dn : length of 'dimnames' [2] not equal to array extent
+
+
+#### INFANT ####
+## KEGG Orthology Pathway
+#Annotate Pathway
+daa_annotated_results_df_a <- pathway_annotation(pathway = "KO", daa_results_df = daa_results_df_a, ko_to_kegg = TRUE)
+  # !!! Error code (below) ; unsure whether to continue
+    ## Error in pathway_annotation(pathway = "KO", daa_results_df = daa_results_df_i,  : 
+    ## No statistically significant biomarkers found. 'Statistically significant biomarkers' refer to those biomarkers that demonstrate a significant difference in expression between different groups, as determined by a statistical test (p_adjust < 0.05 in this case).
+    ## You might consider re-evaluating your experiment design or trying alternative statistical analysis methods. Consult with a biostatistician or a data scientist if you are unsure about the next steps.
+
+# Manually annotating pathway using files from add_descriptions.py on q2-picrust2
+input_file_ko_descrip_i <- "picrust2_output/picrust2_output_infant/KO_metagenome_out/pre_metagenome_unstrat_descrip.tsv" #inputting infant description file
+ko_abundance_descrip_i <- read_delim(input_file_ko_descrip_i)
+    ## I do not know how to properly add description column to my DESeq2 results (daa_results_df_a) as there is no common column (one is KO abundance, other is KEGG abundance); stopped here
+
+## Enzyme Commission pathway
+# Annotate pathway
+metacyc_daa_annotated_results_df_i <- pathway_annotation(pathway = "MetaCyc", daa_results_df = metacyc_daa_results_df_i, ko_to_kegg = FALSE)
+  # !!! Error code (below)
+    ## Error in `$<-.data.frame`(`*tmp*`, "description", value = character(0)) : 
+    ## replacement has 0 rows, data has 1
+
+# Manually annotating pathway using files from add_descriptions.py on q2-picrust2
+input_file_metacyc_descrip_i <- "picrust2_output/picrust2_output_infant/EC_metagenome_out/pred_metagenome_unstrat_descrip.tsv" #inputting infant description file
+metacyc_abundance_descrip_i <- read_delim(input_file_metacyc_descrip_i, delim = "\t")
+metacyc_descrip_daa_results_df_i <- metacyc_daa_results_df_i %>% 
+  left_join(metacyc_abundance_descrip_i, by =c("feature" = "function")) # Add descriptions column to DESeq2 results
+
+# Generate PCA plot
+metacyc_pcaplot_i <- pathway_pca(abundance = metacyc_abundance_i %>% column_to_rownames("function"), metadata = metadata_infant, group = "age_category") #PCA Plot for infant MetaCyc Pathway
+  # !!! Error code (below)
+    ## Error in data.frame(..., check.names = FALSE) : 
+    ## arguments imply differing number of rows: 15, 307
+
+# Generate pathway error bar plot
+pathway_errorbar(
+  abundance = metacyc_abundance_i %>% column_to_rownames("function"),
+  daa_results_df = metacyc_descrip_daa_results_df_i[metacyc_descrip_daa_results_df_i$feature %in% selected_features_EC_a$feature, ],
+  Group = metadata_infant$age_category,
+  ko_to_kegg = FALSE,
+  p_values_threshold = 0.05,
+  order = "group",
+  select = NULL,
+  p_value_bar = TRUE,
+  colors = NULL,
+  x_lab = "description"
+) #create pathway error bar plot
+  # !!! Error code (below)
+    ## Error in pathway_errorbar(abundance = metacyc_abundance_i %>% column_to_rownames("function"),  : 
+    ## Visualization with 'pathway_errorbar' cannot be performed because there are no features with statistical significance. For possible solutions, please check the FAQ section of the tutorial.
+
+# Generate pathway heatmap
+metafeature_with_p_0.05_i <- metacyc_descrip_daa_results_df_i %>% filter(p_adjust < 0.05) #filter for statistically significant data
+pathway_heatmap(abundance = metacyc_abundance_i %>% filter("function" %in% metafeature_with_p_0.05_i$feature) %>% column_to_rownames("function"), metadata = metadata_infant, group = "age_category")
+  # !!! Error code (below)
+    ## Error in dimnames(x) <- dn : 
+    ## length of 'dimnames' [2] not equal to array extent
